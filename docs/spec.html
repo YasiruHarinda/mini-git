@@ -1,0 +1,437 @@
+<title>Mini Git</title>
+<style>
+  :root {
+    --ground:#F4F6F8; --surface:#FFFFFF; --surface-2:#EDF1F4;
+    --ink:#10161D; --ink-muted:#56646F; --ink-faint:#7C8B97;
+    --line:#DEE4EA; --line-strong:#C3CED7;
+    --accent:#0E7C86; --accent-soft:#E1EFF1;
+    --add:#2F7A4D; --del:#B0392F;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --serif: "Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --mono: ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0D1319; --surface:#141C24; --surface-2:#1A242D;
+      --ink:#DCE5EC; --ink-muted:#93A3B0; --ink-faint:#6F8090;
+      --line:#232E38; --line-strong:#33414D;
+      --accent:#48CBD6; --accent-soft:#123034;
+      --add:#6BC48C; --del:#E0796C;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0D1319; --surface:#141C24; --surface-2:#1A242D;
+    --ink:#DCE5EC; --ink-muted:#93A3B0; --ink-faint:#6F8090;
+    --line:#232E38; --line-strong:#33414D;
+    --accent:#48CBD6; --accent-soft:#123034;
+    --add:#6BC48C; --del:#E0796C;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font-family: var(--serif); font-size: 17px; line-height: 1.65;
+    margin: 0; padding: 0 24px 120px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+
+  /* ---- masthead ---- */
+  header.mast { padding: 72px 0 40px; border-bottom: 2px solid var(--ink); }
+  .eyebrow {
+    font-family: var(--mono); font-size: .7rem; text-transform: uppercase;
+    letter-spacing: .13em; color: var(--accent); margin: 0 0 20px;
+  }
+  .eyebrow .sep { color: var(--line-strong); margin: 0 .55em; }
+  h1 {
+    font-family: var(--sans); font-weight: 700; letter-spacing: -.03em;
+    font-size: clamp(2.6rem, 7vw, 3.9rem); line-height: 1.02;
+    margin: 0 0 18px; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 1.2rem; line-height: 1.5; color: var(--ink-muted);
+    margin: 0; max-width: 34em;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 26px;
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-faint);
+    margin: 30px 0 0; padding: 0; list-style: none;
+  }
+  .meta b { color: var(--ink-muted); font-weight: 500; }
+
+  /* ---- contents ---- */
+  nav.toc { margin: 40px 0 0; padding: 22px 26px; background: var(--surface); border: 1px solid var(--line); }
+  nav.toc h2 {
+    font-family: var(--mono); font-size: .7rem; text-transform: uppercase;
+    letter-spacing: .13em; color: var(--ink-faint); font-weight: 500;
+    margin: 0 0 14px; border: 0; padding: 0;
+  }
+  nav.toc ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+  nav.toc a { font-family: var(--sans); font-size: .93rem; color: var(--ink); text-decoration: none; display: flex; gap: 14px; }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc .n { font-family: var(--mono); color: var(--ink-faint); font-size: .8rem; min-width: 1.2em; }
+
+  /* ---- sections ---- */
+  section { margin: 64px 0 0; }
+  h2 {
+    font-family: var(--sans); font-weight: 680; letter-spacing: -.022em;
+    font-size: 1.72rem; line-height: 1.2; margin: 0 0 24px;
+    padding-bottom: 14px; border-bottom: 1px solid var(--line-strong);
+    text-wrap: balance;
+  }
+  h2 .n { font-family: var(--mono); font-size: .82rem; color: var(--accent); font-weight: 400; letter-spacing: 0; margin-right: 12px; vertical-align: 3px; }
+  h3 {
+    font-family: var(--mono); font-size: .74rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .11em; color: var(--ink-muted);
+    margin: 42px 0 16px;
+  }
+  p { margin: 0 0 20px; max-width: 68ch; }
+  strong { font-weight: 600; color: var(--ink); }
+  em { font-style: italic; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  code {
+    font-family: var(--mono); font-size: .86em;
+    background: var(--surface-2); padding: .1em .34em; border-radius: 2px;
+  }
+
+  /* ---- lists ---- */
+  ul.plain { margin: 0 0 20px; padding: 0 0 0 20px; max-width: 68ch; }
+  ul.plain li { margin-bottom: 11px; }
+  ol.stories { margin: 0 0 26px; padding: 0; list-style: none; counter-reset: none; max-width: 70ch; }
+  ol.stories li {
+    display: flex; gap: 16px; padding: 11px 0;
+    border-bottom: 1px solid var(--line); font-size: .99rem; line-height: 1.55;
+  }
+  ol.stories li::before {
+    content: counter(li); counter-increment: li;
+    font-family: var(--mono); font-size: .76rem; color: var(--ink-faint);
+    min-width: 1.9em; padding-top: .28em; font-variant-numeric: tabular-nums;
+  }
+  ol.stories { counter-reset: li var(--start, 0); }
+
+  /* ---- tables ---- */
+  .scroll { overflow-x: auto; margin: 0 0 26px; border: 1px solid var(--line); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--sans); font-size: .88rem; }
+  th, td { text-align: left; padding: 10px 15px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--ink-faint); font-weight: 500;
+    background: var(--surface-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-muted); white-space: nowrap; }
+  .conflict { color: var(--del); font-weight: 600; font-family: var(--mono); font-size: .82rem; }
+  .ok { color: var(--add); }
+
+  /* ---- code block ---- */
+  pre {
+    font-family: var(--mono); font-size: .82rem; line-height: 1.6;
+    background: var(--surface); border: 1px solid var(--line);
+    padding: 20px 22px; overflow-x: auto; margin: 0 0 22px; color: var(--ink);
+  }
+  pre .k { color: var(--accent); }
+  pre .c { color: var(--ink-faint); }
+
+  /* ---- callout ---- */
+  .note {
+    background: var(--accent-soft); border-left: 3px solid var(--accent);
+    padding: 18px 22px; margin: 0 0 26px; font-size: .96rem;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note .lbl {
+    display: block; font-family: var(--mono); font-size: .66rem;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--accent);
+    margin-bottom: 8px; font-weight: 600;
+  }
+
+  footer { margin: 80px 0 0; padding-top: 26px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: .74rem; color: var(--ink-faint); }
+
+  a:focus-visible, nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  @media (max-width: 560px) {
+    body { font-size: 16px; padding: 0 18px 80px; }
+    header.mast { padding-top: 48px; }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Specification<span class="sep">/</span>Ready for agent</p>
+  <h1>Mini Git</h1>
+  <p class="standfirst">A version control engine that is byte-compatible with real git, wrapped in an interface whose only job is to make the object graph visible while you manipulate it.</p>
+  <ul class="meta">
+    <li><b>Date</b> 2026-08-16</li>
+    <li><b>Budget</b> ~47h across 5 checkpoints</li>
+    <li><b>Vocabulary</b> CONTEXT.md</li>
+    <li><b>Decisions</b> ADR 0001–0003</li>
+  </ul>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#s1"><span class="n">1</span> Problem Statement</a></li>
+      <li><a href="#s2"><span class="n">2</span> Solution</a></li>
+      <li><a href="#s3"><span class="n">3</span> User Stories</a></li>
+      <li><a href="#s4"><span class="n">4</span> Implementation Decisions</a></li>
+      <li><a href="#s5"><span class="n">5</span> Testing Decisions</a></li>
+      <li><a href="#s6"><span class="n">6</span> Out of Scope</a></li>
+      <li><a href="#s7"><span class="n">7</span> Further Notes</a></li>
+    </ol>
+  </nav>
+</header>
+
+<section id="s1">
+  <h2><span class="n">01</span>Problem Statement</h2>
+  <p>Millions of people use git every day and cannot say what a commit is. They know the commands and not the model, so when git behaves unexpectedly — a branch “loses” work, a merge conflicts where it seemed it shouldn’t, a checkout refuses — they have no mental model to reason from and fall back on memorised recovery incantations.</p>
+  <p>The available ways to fix this all fail in the same way. Tutorials explain the object model in prose, but prose cannot be poked at; the reader nods and retains nothing. Git clients hide the model deliberately — that is their job — so daily use teaches nothing about what is underneath. Git’s own plumbing commands expose everything, but they answer questions you must already know how to ask, and they return text where the thing being described is a graph.</p>
+  <p>So the gap is specific: <strong>there is no way to perform a version control operation and watch what it does to the object graph.</strong> The one thing that would make the model obvious — seeing Objects appear, seeing which are reused, watching a flat Index fold into nested Trees — is exactly what every existing tool either hides or renders as text.</p>
+</section>
+
+<section id="s2">
+  <h2><span class="n">02</span>Solution</h2>
+  <p>A version control engine implementing git’s real object model — Blobs, nested Trees, Commits, Refs, an Index, three-way merge — paired with an interface whose only job is to make the Object Store visible while you manipulate it.</p>
+  <p>Two properties carry it.</p>
+  <p><strong>It is really git, verifiably.</strong> Objects are encoded byte-identically to real git, so Object IDs match <code>git hash-object</code> exactly, and a repository the tool creates can be read by real <code>git log</code>. Correctness is not asserted, it is demonstrated against the reference implementation.</p>
+  <p><strong>The internals are the interface.</strong> Every panel is a window onto the object graph. Staging a file shows a flat list growing; committing shows that list fold into a hierarchy; a second commit shows four new Objects appear beside dozens reused unchanged. The claim “version control stores snapshots affordably through structural sharing” is never made in prose, because the screen shows it happening.</p>
+</section>
+
+<section id="s3">
+  <h2><span class="n">03</span>User Stories</h2>
+
+  <h3>Seeing the Object Store</h3>
+  <ol class="stories" style="--start:0">
+    <li>As someone learning git, I want to see every Object created by an action, so that I can connect a command to its effect rather than memorising the command.</li>
+    <li>As someone learning git, I want to click a Commit and see the Tree it points at, so that I can follow the chain from history to actual file contents.</li>
+    <li>As someone learning git, I want to walk from a Tree into its sub-Trees and down to Blobs, so that I can see that a directory hierarchy is made of Objects pointing at Objects.</li>
+    <li>As someone learning git, I want every Object ID visible next to its Object, so that hashes stop being opaque noise and become addresses.</li>
+    <li>As someone learning git, I want to see the content of a Blob, so that I can confirm a Blob really is just file bytes with no name and no history.</li>
+    <li>As someone learning git, I want Objects created by the latest action marked distinctly from Objects reused unchanged, so that Structural Sharing is something I observe rather than something I am told.</li>
+    <li>As someone learning git, I want to see how many unique Blobs exist against how many file versions have been committed, so that I understand why storing whole snapshots is affordable.</li>
+    <li>As someone learning git, I want to see two identical files in different directories resolve to one Blob, so that content addressing stops being abstract.</li>
+    <li>As someone learning git, I want to see the full list of Refs at once, so that I can see a Branch is a single pointer and not a container of Commits.</li>
+    <li>As someone learning git, I want to see which Ref HEAD points at, so that “where am I?” has a visible answer.</li>
+  </ol>
+
+  <h3>Working Tree and Index</h3>
+  <ol class="stories" style="--start:10">
+    <li>As a user, I want to create a file in the Working Tree, so that I have something to version.</li>
+    <li>As a user, I want to edit a file’s contents, so that I can produce a change worth committing.</li>
+    <li>As a user, I want to delete a file, so that I can see how removal is recorded.</li>
+    <li>As a user, I want to stage a file, so that I can choose what goes into the next Commit.</li>
+    <li>As a user, I want to unstage a file, so that I can correct a staging mistake without losing my edits.</li>
+    <li>As someone learning git, I want the Working Tree, Index and last Commit shown as three distinct states side by side, so that I can see all three versions of a file existing at once.</li>
+    <li>As someone learning git, I want to stage a file and then edit it again, so that I can see the same file appear as both staged and modified and finally understand why that happens.</li>
+    <li>As someone learning git, I want the Index displayed as the flat sorted list of paths and Blob IDs it actually is, so that I stop imagining it as a folder.</li>
+    <li>As someone learning git, I want to watch the flat Index fold into nested Trees at the moment I commit, so that I can see what committing actually does.</li>
+  </ol>
+
+  <h3>Committing and history</h3>
+  <ol class="stories" style="--start:19">
+    <li>As a user, I want to commit staged changes with a message, so that I can record a snapshot.</li>
+    <li>As a user, I want the new Commit’s Object ID shown immediately, so that I can find it again in the graph.</li>
+    <li>As someone learning git, I want to see that a Commit references a whole Tree rather than a set of changes, so that I understand snapshots are stored and diffs are computed.</li>
+    <li>As a user, I want to see the history as a list with messages, IDs and times, so that I can scan what happened.</li>
+    <li>As a user, I want to see the history as a graph, so that divergence and convergence are visible as shape rather than inferred from text.</li>
+    <li>As a user, I want each Branch to occupy its own lane in the graph, so that I can follow one line of development with my eye.</li>
+    <li>As a user, I want a Merge Commit drawn with both of its Parent edges, so that the join is visible.</li>
+    <li>As a user, I want to click any node in the graph and inspect that Commit’s Objects, so that the graph is a way into the store rather than a picture beside it.</li>
+    <li>As someone learning git, I want to see that history is a graph rather than a timeline, so that I understand why merging is a graph problem.</li>
+  </ol>
+
+  <h3>Branching and checkout</h3>
+  <ol class="stories" style="--start:28">
+    <li>As a user, I want to create a Branch, so that I can work without disturbing the main line.</li>
+    <li>As a user, I want to see that creating a Branch produces no new Objects at all, so that I learn branching is free.</li>
+    <li>As a user, I want to check out a Branch, so that I can move between lines of work.</li>
+    <li>As a user, I want the Working Tree to change to match the Branch I checked out, so that checkout has a visible effect.</li>
+    <li>As a user, I want to be refused a checkout that would overwrite uncommitted changes, so that I cannot silently lose work.</li>
+    <li>As a user, I want the refusal to explain which files are in the way, so that I know what to commit or discard.</li>
+    <li>As a user, I want to commit on two Branches and see them diverge in the graph, so that I can set up the situation merging exists to resolve.</li>
+  </ol>
+
+  <h3>Merging</h3>
+  <ol class="stories" style="--start:35">
+    <li>As a user, I want to merge one Branch into another, so that two lines of work become one.</li>
+    <li>As someone learning git, I want the Merge Base identified and shown before the merge runs, so that I can see the merge is anchored on a common ancestor rather than a comparison of two tips.</li>
+    <li>As a user, I want a merge with no divergence to fast-forward, so that trivial merges stay trivial.</li>
+    <li>As someone learning git, I want a fast-forward to visibly create no Merge Commit, so that I understand why some merges leave no trace.</li>
+    <li>As a user, I want two Branches that edited different Hunks of the same file to merge automatically, so that I am not asked to resolve changes that do not actually collide.</li>
+    <li>As a user, I want a Conflict reported only where Hunks genuinely overlap, so that conflicts are precise rather than whole-file surrender.</li>
+    <li>As a user, I want to see a Conflict presented with the Merge Base version alongside both sides, so that I can see what each side changed rather than guessing.</li>
+    <li>As a user, I want to resolve a Conflict by choosing one side, so that I can complete the merge.</li>
+    <li>As a user, I want a file deleted on one Branch and modified on the other to be reported as a Conflict, so that a deletion cannot silently discard someone’s work.</li>
+    <li>As a user, I want the same file added on both Branches with different contents to be reported as a Conflict, so that concurrent creation is handled.</li>
+    <li>As a user, I want the same file added on both Branches with identical contents to merge silently, so that agreement is not treated as disagreement.</li>
+    <li>As a user, I want the completed merge to produce a Commit with two Parents, so that the history records that a join happened.</li>
+  </ol>
+
+  <h3>Diff</h3>
+  <ol class="stories" style="--start:47">
+    <li>As a user, I want a diff between any two Commits, so that I can see what changed without reading two snapshots.</li>
+    <li>As a user, I want diffs shown at line level with additions and removals distinguished, so that changes are legible.</li>
+    <li>As someone learning git, I want the diff labelled as computed rather than stored, so that the snapshot model stays clear.</li>
+  </ol>
+
+  <h3>Trust and verification</h3>
+  <ol class="stories" style="--start:50">
+    <li>As a developer evaluating this project, I want Object IDs to match real git’s for the same content, so that I can verify the implementation against something other than its own tests.</li>
+    <li>As a developer evaluating this project, I want a test suite that asserts against real git’s output, so that correctness is demonstrated rather than claimed.</li>
+    <li>As a developer evaluating this project, I want the engine to contain no reference to files or browsers, so that I can see the boundary was drawn deliberately.</li>
+    <li>As a CLI user, I want to run the tool in a terminal against real files on disk, so that it is a real tool and not only a simulation.</li>
+    <li>As a CLI user, I want to export a repository as a real git directory, so that I can run actual <code>git log</code> against something my tool produced.</li>
+  </ol>
+
+  <h3>The deployed demo</h3>
+  <ol class="stories" style="--start:55">
+    <li>As a first-time visitor, I want a repository with existing history already loaded, so that the graph and the Object Store are worth looking at within a second of arriving.</li>
+    <li>As a first-time visitor, I want a preloaded scenario that is already mid-conflict, so that I can reach the most interesting behaviour without constructing it myself.</li>
+    <li>As a visitor, I want to reset to the initial state, so that I can experiment freely without fear of ruining the demo.</li>
+  </ol>
+</section>
+
+<section id="s4">
+  <h2><span class="n">04</span>Implementation Decisions</h2>
+
+  <h3>Governing decisions</h3>
+  <p>Three ADRs govern this work and are not reopened here: objects are encoded byte-identically to real git (ADR 0001), the engine is pure with pluggable storage (ADR 0002), and the interface is an X-ray rather than a git client (ADR 0003).</p>
+
+  <h3>Modules</h3>
+  <ul class="plain">
+    <li><strong>Object codec</strong> — serialises and parses Blobs, Trees and Commits in git’s exact format, and computes Object IDs. Owns the tree entry sort rule, including the trailing-slash convention for directory names.</li>
+    <li><strong>Object Store</strong> — reads and writes Objects by ID through the storage interface. Append-only.</li>
+    <li><strong>Storage adapters</strong> — an in-memory adapter backed by browser storage, and a filesystem adapter. The filesystem adapter additionally writes zlib-compressed loose objects in git’s directory layout.</li>
+    <li><strong>Index</strong> — the flat sorted list of paths to Blob IDs, and the operation that folds it into nested Trees at Commit time.</li>
+    <li><strong>Refs</strong> — named pointers, including HEAD. The only mutable state in a Repository.</li>
+    <li><strong>Diff</strong> — longest-common-subsequence line diff between two Blobs, and recursive Tree comparison to determine which paths changed between two Commits.</li>
+    <li><strong>Merge</strong> — Merge Base discovery by breadth-first ancestry walk, three-way combination per path, and Conflict reporting at Hunk level.</li>
+    <li><strong>Graph layout</strong> — a pure query mapping a set of Commits to positioned nodes and edges. Lives in the engine, not the interface.</li>
+    <li><strong>Repository API</strong> — the single public surface composing the above. Everything outside the engine goes through it.</li>
+    <li><strong>CLI</strong> — a thin argument parser over the Repository API against the filesystem adapter.</li>
+    <li><strong>Web interface</strong> — a view over the Repository API against the in-memory adapter.</li>
+  </ul>
+
+  <h3>The storage seam</h3>
+  <p>The interface between engine and storage, which encodes ADR 0002 more precisely than prose can. It is deliberately tiny; a third adapter should be easy to write, and that is the test of whether it is really an interface.</p>
+<pre><span class="k">interface</span> ObjectStorage {
+  read(id: ObjectId): Promise&lt;Uint8Array | null&gt;;
+  write(id: ObjectId, bytes: Uint8Array): Promise&lt;void&gt;;
+  has(id: ObjectId): Promise&lt;boolean&gt;;
+  listRefs(): Promise&lt;Map&lt;RefName, ObjectId&gt;&gt;;
+  setRef(name: RefName, id: ObjectId): Promise&lt;void&gt;;
+  deleteRef(name: RefName): Promise&lt;void&gt;;
+  readHead(): Promise&lt;RefName&gt;;
+  writeHead(name: RefName): Promise&lt;void&gt;;
+}</pre>
+  <div class="note">
+    <span class="lbl">Constraint</span>
+    <p>No path, no <code>fs</code> call and no browser API may appear above this line. Any convenience that leaks one destroys the property the interface exists to create.</p>
+  </div>
+
+  <h3>Repository API</h3>
+  <p>The single seam. Commands: <code>init</code>, <code>add</code>, <code>unstage</code>, <code>commit</code>, <code>log</code>, <code>branch</code>, <code>checkout</code>, <code>merge</code>, <code>resolve</code>, <code>diff</code>. Queries: read an Object by ID, list Refs, read HEAD, read the Index, read the Working Tree, read graph layout, and report Object Store statistics for the dedup counter.</p>
+  <p>Every query returns whether each Object in its result was newly created by the most recent operation or reused, since Structural Sharing must be visible in the interface (story 6) and only the engine knows the answer.</p>
+
+  <h3>Merge case matrix</h3>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Base</th><th>Ours</th><th>Theirs</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>present</td><td>unchanged</td><td>unchanged</td><td>keep base</td></tr>
+        <tr><td>present</td><td>changed</td><td>unchanged</td><td>take ours</td></tr>
+        <tr><td>present</td><td>unchanged</td><td>changed</td><td>take theirs</td></tr>
+        <tr><td>present</td><td>changed</td><td>changed, non-overlapping Hunks</td><td class="ok">combine automatically</td></tr>
+        <tr><td>present</td><td>changed</td><td>changed, overlapping Hunks</td><td class="conflict">CONFLICT</td></tr>
+        <tr><td>present</td><td>deleted</td><td>changed</td><td class="conflict">CONFLICT</td></tr>
+        <tr><td>present</td><td>changed</td><td>deleted</td><td class="conflict">CONFLICT</td></tr>
+        <tr><td>present</td><td>deleted</td><td>deleted</td><td>delete</td></tr>
+        <tr><td>absent</td><td>added</td><td>absent</td><td>take ours</td></tr>
+        <tr><td>absent</td><td>added</td><td>added, identical</td><td class="ok">take either</td></tr>
+        <tr><td>absent</td><td>added</td><td>added, differing</td><td class="conflict">CONFLICT</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Fast-forward is detected before any of this: when the Merge Base is the current Branch’s Commit, the Ref moves and no Merge Commit is created.</p>
+
+  <h3>Checkout semantics</h3>
+  <p>Checkout refuses when the Working Tree holds uncommitted changes that the switch would overwrite, matching git, and names the offending paths. Changes to files that do not differ between the two Commits are carried across untouched. This resolves the last open term in <code>CONTEXT.md</code>.</p>
+
+  <h3>Interface composition</h3>
+  <p>A single screen, no routing: Working Tree / Index / Commit as three columns; a file editor; the Commit graph; an Object inspector that walks Commit to Tree to Blob; a diff view; an Object Store statistics line. Conflict resolution presents Merge Base, ours and theirs together. An in-browser terminal accepts the same commands the CLI does.</p>
+</section>
+
+<section id="s5">
+  <h2><span class="n">05</span>Testing Decisions</h2>
+
+  <h3>What makes a good test here</h3>
+  <p>A test drives the Repository API and asserts on observable results — Object IDs, Ref positions, Working Tree contents, Index contents, Conflict reports, graph shape. It never reaches into tree construction, ancestry walking or diff internals. Those are reachable through the public surface, so testing them directly would only couple the suite to decisions we want to stay free to change.</p>
+  <p>Tests are written in the vocabulary of <code>CONTEXT.md</code>. A test named for a Merge Base or a Hunk survives a refactor; one named for a function does not.</p>
+
+  <h3>Seams</h3>
+  <p><strong>One seam: the Repository API.</strong> Every behavioural test enters here. Two notes on why this holds rather than being aspirational:</p>
+  <ul class="plain">
+    <li><strong>The differential oracle is the same seam.</strong> Comparing Object IDs against real git uses the Repository API through the filesystem adapter, with an external subprocess supplying the expected value. It adds an assertion source, not an entry point.</li>
+    <li><strong>Graph layout lives in the engine for this reason.</strong> Positioning Commits into lanes is real logic with real edge cases — merges, multiple roots, criss-cross histories. Placing it in the interface would force a second seam and a browser test harness. As an engine query it stays on the first seam and is tested as data rather than pixels.</li>
+  </ul>
+  <p>The interface gets no test seam. It is a view over engine state, and it must stay thin enough that this remains true; logic appearing there is a signal it belongs in the engine.</p>
+
+  <h3>Coverage</h3>
+  <ul class="plain">
+    <li><strong>Object codec</strong> — round-trip all three Object types; entry sort order including the directory trailing-slash trap; empty Blob; empty Tree.</li>
+    <li><strong>Differential against real git</strong> — Object IDs for Blobs, Trees and Commits compared to <code>git hash-object</code> and <code>git mktree</code>, plus an end-to-end check that real <code>git log</code> reads an exported repository.</li>
+    <li><strong>Index and commit</strong> — staging captures content at that moment; a file staged then edited appears in both states; the flat Index produces correct nested Trees.</li>
+    <li><strong>Structural Sharing</strong> — changing one deep file creates exactly the expected number of new Objects and reuses the rest. This is the project’s central claim, so it is asserted numerically.</li>
+    <li><strong>Refs and checkout</strong> — branching creates no Objects; checkout rewrites the Working Tree; checkout refuses when changes would be lost and names the paths.</li>
+    <li><strong>Merge</strong> — Merge Base discovery across linear, diverged and multi-merge histories; every row of the case matrix; fast-forward creating no Merge Commit; a completed merge having two Parents.</li>
+    <li><strong>Diff</strong> — line-level additions and removals; identical inputs producing an empty diff; whole-file addition and deletion.</li>
+    <li><strong>Graph layout</strong> — lane assignment for diverged and merged histories; stable output for the same input.</li>
+  </ul>
+
+  <h3>Prior art</h3>
+  <p>None. This is a greenfield repository, so this spec establishes the convention rather than following one. Node’s test runner or Vitest against the filesystem adapter; the differential tests require real git on the machine and should skip with a clear message rather than fail where it is absent.</p>
+</section>
+
+<section id="s6">
+  <h2><span class="n">06</span>Out of Scope</h2>
+  <ul class="plain">
+    <li><strong>Renames.</strong> Not recorded and not detected; a move is a delete plus an add. Closed in <code>CONTEXT.md</code>.</li>
+    <li><strong>Remotes and networking.</strong> No clone, fetch, push or pull. Nothing distributed.</li>
+    <li><strong>Packfiles and delta compression.</strong> Loose objects only. zlib is used on the export path solely for git compatibility, not as a storage strategy.</li>
+    <li><strong>Rebase, stash, cherry-pick, reflog, tags, submodules, hooks, <code>.gitignore</code>.</strong></li>
+    <li><strong>File modes beyond regular files.</strong> No executable bit handling, symlinks or binary-safe diffing.</li>
+    <li><strong>SHA-256 object format.</strong> SHA-1 only, because compatibility with the installed git is the point of ADR 0001.</li>
+    <li><strong>Accounts, authentication, persistence across devices, multi-user access.</strong></li>
+    <li><strong>Hosted per-user filesystems.</strong> Rejected in ADR 0002.</li>
+    <li><strong>Being a usable git client.</strong> Rejected in ADR 0003; the README must set this frame in its first sentence.</li>
+  </ul>
+</section>
+
+<section id="s7">
+  <h2><span class="n">07</span>Further Notes</h2>
+
+  <h3>Build order</h3>
+  <p>Sequenced so that abandoning at any point still leaves something demonstrable — the failure mode for a multi-week evening project is attrition, not hours.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th></th><th>Cumulative</th><th>Lands</th><th>Demonstrable as</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td class="num">8h</td><td>Object codec, store, storage seam, filesystem adapter, differential tests</td><td>Test output showing IDs matching real git</td></tr>
+        <tr><td class="num">2</td><td class="num">17h</td><td>init, add, commit, log, Refs, branch, checkout, HEAD</td><td>A terminal session building real history</td></tr>
+        <tr><td class="num">3</td><td class="num">24h</td><td>Diff, Merge Base, three-way merge, Conflicts, fast-forward</td><td>The centrepiece, complete before any interface exists</td></tr>
+        <tr><td class="num">4</td><td class="num">37h</td><td>Interface: graph, Object inspector, diff view, editor, three columns; deployed</td><td>The public link</td></tr>
+        <tr><td class="num">5</td><td class="num">47h</td><td>Conflict resolution UI, in-browser terminal, git export, README</td><td>The full thing</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Push the README at checkpoint 3 so the repository is presentable from the halfway mark.</p>
+
+  <h3>Known traps</h3>
+  <p>Tree entry sort order is the likely time sink: entries sort as though directory names carry a trailing slash, so <code>src.js</code> precedes <code>src/</code> against what a naive comparison gives. Object IDs will disagree with git until this is exactly right, and the differential tests will catch it immediately — which is the argument for building them first.</p>
+
+  <h3>Assumed stack</h3>
+  <p>Vite, React, TypeScript. Hand-rolled SVG for the graph, laid out by topological order against Branch lane; no graph library. Preloaded demo repositories so the deployed link is never empty.</p>
+</section>
+
+<footer>Mini Git — specification, 2026-08-16 · ready-for-agent</footer>
+
+</div>
