@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { inflateSync } from "node:zlib";
 import { Repository } from "../src/engine/repository.js";
 import { FilesystemStorage } from "../src/engine/storage/filesystem.js";
+import type { Signature } from "../src/engine/commit.js";
 import { hasRealGit, runGit } from "./support/real-git.js";
 import { makeTmpDir, removeTmpDir } from "./support/tmpdir.js";
 
@@ -36,6 +37,38 @@ describe("FilesystemStorage: git-compatible loose object layout", () => {
     const result = runGit(dir, ["cat-file", "-p", id]);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("readable by real git");
+  });
+
+  it.skipIf(!hasRealGit())("real git cat-file prints Trees and Commits written through this adapter", async () => {
+    dir = await makeTmpDir();
+    const storage = new FilesystemStorage(join(dir, ".git"));
+    await storage.writeHead("refs/heads/main");
+    const repo = new Repository(storage);
+
+    const blobId = await repo.writeBlob(new TextEncoder().encode("file content"));
+    const treeId = await repo.writeTree([{ mode: "100644", name: "file.txt", id: blobId }]);
+    const author: Signature = {
+      name: "Test Author",
+      email: "author@example.com",
+      timestamp: 1_700_000_000,
+      timezoneOffsetMinutes: 0,
+    };
+    const commitId = await repo.writeCommit({
+      tree: treeId,
+      parents: [],
+      author,
+      committer: author,
+      message: "first commit",
+    });
+
+    const treeOutput = runGit(dir, ["cat-file", "-p", treeId]);
+    expect(treeOutput.status).toBe(0);
+    expect(treeOutput.stdout).toContain("file.txt");
+
+    const commitOutput = runGit(dir, ["cat-file", "-p", commitId]);
+    expect(commitOutput.status).toBe(0);
+    expect(commitOutput.stdout).toContain(`tree ${treeId}`);
+    expect(commitOutput.stdout).toContain("first commit");
   });
 });
 
