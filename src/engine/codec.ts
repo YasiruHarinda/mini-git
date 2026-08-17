@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha1Hex } from "./sha1.js";
 import type { ObjectId } from "./storage/types.js";
 
 export type ObjectType = "blob" | "tree" | "commit";
@@ -19,7 +19,7 @@ export function frameObject(type: ObjectType, content: Uint8Array): Uint8Array {
 }
 
 export function hashFrame(frame: Uint8Array): ObjectId {
-  return createHash("sha1").update(frame).digest("hex");
+  return sha1Hex(frame);
 }
 
 export function hashObject(type: ObjectType, content: Uint8Array): ObjectId {

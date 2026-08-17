@@ -138,3 +138,19 @@ describe("Repository: log", () => {
     expect(log[0]!.author.timestamp).toBeGreaterThan(0);
   });
 });
+
+describe("Repository: readCommitEntries", () => {
+  it("flattens a Commit's Tree to the same shape as readIndex, for an interface to show side by side", async () => {
+    const repo = new Repository(new MemoryStorage());
+    await repo.init();
+    const a = await repo.add("src/a.txt", enc("a"));
+    const b = await repo.add("b.txt", enc("b"));
+    const commit = await repo.commit({ message: "first" });
+
+    const entries = await repo.readCommitEntries(commit.id);
+    expect(entries).toEqual([
+      { path: "b.txt", id: b.id },
+      { path: "src/a.txt", id: a.id },
+    ]);
+  });
+});

@@ -388,6 +388,12 @@ export class Repository {
     return this.flattenTree(commit.tree);
   }
 
+  /** A Commit's whole snapshot, flattened to the same (path, Blob ID) shape as `readIndex` — so an interface can show a Commit beside the Index without walking its Tree by hand. */
+  async readCommitEntries(commitId: ObjectId): Promise<IndexEntry[]> {
+    const paths = await this.commitPaths(commitId);
+    return sortIndexEntries([...paths.entries()].map(([path, id]) => ({ path, id })));
+  }
+
   /**
    * Moves HEAD to the given Branch and reports how the Working Tree must
    * change to match it. The engine computes the plan; the caller (CLI or
