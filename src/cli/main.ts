@@ -3,6 +3,7 @@ import { dirname, join, relative, sep } from "node:path";
 import { CheckoutConflictError, Repository } from "../engine/repository.js";
 import { FilesystemStorage } from "../engine/storage/filesystem.js";
 import { loadIndexSidecar, saveIndexSidecar } from "./index-sidecar.js";
+import { loadMergeStateSidecar, saveMergeStateSidecar } from "./merge-state-sidecar.js";
 
 export interface CliIO {
   cwd: string;
@@ -24,8 +25,10 @@ async function withRepository<T>(io: CliIO, fn: (repo: Repository, gitDir: strin
   const storage = new FilesystemStorage(gitDir);
   const repo = new Repository(storage);
   repo.restoreIndex(await loadIndexSidecar(gitDir));
+  repo.restoreMergeState(await loadMergeStateSidecar(gitDir));
   const result = await fn(repo, gitDir);
   await saveIndexSidecar(gitDir, repo.readIndex());
+  await saveMergeStateSidecar(gitDir, repo.mergeStatus());
   return result;
 }
 
@@ -199,8 +202,34 @@ export async function runCli(argv: string[], io: CliIO): Promise<number> {
           io.stdout(`Fast-forward to ${outcome.to}`);
           return 0;
         }
-        io.stderr("branches have diverged: a three-way merge is not implemented yet");
+        if (outcome.type === "merged") {
+          io.stdout(`Merge made by the 'three-way' strategy: ${outcome.id}`);
+          return 0;
+        }
+        io.stderr("Automatic merge failed; fix conflicts and then commit the result:");
+        for (const conflict of outcome.conflicts) io.stderr(`\tboth modified:   ${conflict.path}`);
         return 1;
+      } catch (err) {
+        io.stderr((err as Error).message);
+        return 1;
+      }
+    }
+
+    case "resolve": {
+      const [side, path] = rest;
+      if (side !== "ours" && side !== "theirs") {
+        io.stderr("usage: mini-git resolve <ours|theirs> <path>");
+        return 1;
+      }
+      if (!path) {
+        io.stderr("usage: mini-git resolve <ours|theirs> <path>");
+        return 1;
+      }
+      try {
+        await withRepository(io, async (repo) => {
+          repo.resolve(toRepoPath(io.cwd, path), side);
+        });
+        return 0;
       } catch (err) {
         io.stderr((err as Error).message);
         return 1;

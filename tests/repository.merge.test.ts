@@ -147,7 +147,7 @@ describe("Repository: merge", () => {
     expect(await repo.currentBranch()).toBe("refs/heads/main"); // still on main; main itself moved
   });
 
-  it("reports diverged, without creating a Merge Commit, when both sides have moved", async () => {
+  it("reports a Conflict, without creating a Merge Commit, when both sides edited the same line", async () => {
     const storage = new MemoryStorage();
     const repo = new Repository(storage);
     await repo.init();
@@ -156,7 +156,7 @@ describe("Repository: merge", () => {
     await repo.branch("feature");
 
     await repo.add("a.txt", enc("main-1"));
-    await repo.commit({ message: "on main" });
+    const mainTip = await repo.commit({ message: "on main" });
 
     await storage.writeHead("refs/heads/feature");
     await repo.add("a.txt", enc("feature-1"));
@@ -164,7 +164,12 @@ describe("Repository: merge", () => {
     await storage.writeHead("refs/heads/main");
 
     const outcome = await repo.merge("feature");
-    expect(outcome).toEqual({ type: "diverged", base: base.id });
+    expect(outcome.type).toBe("conflict");
+    if (outcome.type !== "conflict") throw new Error("unreachable");
+    expect(outcome.base).toBe(base.id);
+    expect(outcome.conflicts).toHaveLength(1);
+    expect(outcome.conflicts[0]!.path).toBe("a.txt");
+    expect(await repo.headCommitId()).toBe(mainTip.id); // nothing committed yet
   });
 
   it("refuses to merge a Branch that does not exist", async () => {

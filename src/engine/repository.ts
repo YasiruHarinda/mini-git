@@ -2,6 +2,7 @@ import { decodeCommit, encodeCommit, type CommitData, type Signature } from "./c
 import { hashObject } from "./codec.js";
 import { diffLines, type Hunk } from "./diff.js";
 import { foldIndexIntoTree, sortIndexEntries, type IndexEntry } from "./index-entries.js";
+import { mergeThreeWay } from "./merge.js";
 import { ObjectStore } from "./store.js";
 import type { ObjectId, ObjectStorage, RefName } from "./storage/types.js";
 import { decodeTree, encodeTree, sortTreeEntries, type TreeEntry } from "./tree.js";
@@ -58,15 +59,40 @@ export interface FileDiff {
 }
 
 /**
+ * A Conflict at a single path (CONTEXT.md: Conflict). `baseId`, `oursId`
+ * and `theirsId` are each undefined exactly when that side deleted the
+ * file. `hunks` carries the specific overlapping Hunks from each side when
+ * both sides edited existing content; it is empty for a delete-versus-edit
+ * or an added-on-both-sides Conflict, where the whole file is in dispute
+ * rather than a located region of it.
+ */
+export interface MergeConflict {
+  path: string;
+  baseId?: ObjectId;
+  oursId?: ObjectId;
+  theirsId?: ObjectId;
+  hunks: { ours: Hunk[]; theirs: Hunk[] }[];
+}
+
+/**
  * The result of merging a Branch into the current one.
  * - `already-up-to-date`: the target Commit is already an ancestor of the current one; nothing moved.
  * - `fast-forward`: the current Branch's Commit was itself the Merge Base, so the Ref simply advanced; no Merge Commit was created.
- * - `diverged`: both sides have Commits the other lacks. Combining them is a real three-way merge, not handled here.
+ * - `merged`: a real three-way merge combined both sides automatically into a new Commit with two Parents.
+ * - `conflict`: at least one path could not be combined automatically. No Commit was created; the Repository holds a resolvable in-progress merge (see `resolve`).
  */
 export type MergeOutcome =
   | { type: "already-up-to-date"; base: ObjectId }
   | { type: "fast-forward"; base: ObjectId; from: ObjectId; to: ObjectId }
-  | { type: "diverged"; base: ObjectId | undefined };
+  | { type: "merged"; base: ObjectId; id: ObjectId }
+  | { type: "conflict"; base: ObjectId; target: ObjectId; conflicts: MergeConflict[] };
+
+/** An in-progress merge, resolvable via `resolve` and completed via `commit`. */
+export interface PendingMerge {
+  targetId: ObjectId;
+  base: ObjectId;
+  conflicts: MergeConflict[];
+}
 
 export interface CommitOptions {
   message: string;
@@ -96,6 +122,7 @@ export class Repository {
   private readonly storage: ObjectStorage;
   private readonly store: ObjectStore;
   private index = new Map<string, ObjectId>();
+  private pendingMerge: PendingMerge | undefined;
 
   constructor(storage: ObjectStorage) {
     this.storage = storage;
@@ -186,6 +213,16 @@ export class Repository {
     this.index = new Map(entries.map((e) => [e.path, e.id]));
   }
 
+  /** The merge currently in progress, if any — set by `merge` on Conflict, cleared by `commit` once it completes. */
+  mergeStatus(): PendingMerge | undefined {
+    return this.pendingMerge;
+  }
+
+  /** Rehydrates in-progress merge state. Mirrors `restoreIndex`: the engine keeps this only in memory (ADR 0002), so a caller across process invocations — the CLI — persists and restores it. */
+  restoreMergeState(state: PendingMerge | undefined): void {
+    this.pendingMerge = state;
+  }
+
   // --- Commits and history ----------------------------------------------
 
   async currentBranch(): Promise<RefName> {
@@ -199,6 +236,10 @@ export class Repository {
   }
 
   async commit(options: CommitOptions): Promise<CommitResult> {
+    if (this.pendingMerge && this.pendingMerge.conflicts.length > 0) {
+      const paths = this.pendingMerge.conflicts.map((c) => c.path).join(", ");
+      throw new Error(`cannot commit: unresolved merge conflicts in ${paths}`);
+    }
     if (this.index.size === 0) {
       throw new Error("nothing to commit: the Index is empty");
     }
@@ -212,7 +253,7 @@ export class Repository {
 
     const headRef = await this.storage.readHead();
     const parentId = await this.headCommitId();
-    const parents = parentId ? [parentId] : [];
+    const parents = this.pendingMerge ? [parentId!, this.pendingMerge.targetId] : parentId ? [parentId] : [];
 
     const now = Math.floor(Date.now() / 1000);
     const author: Signature = {
@@ -235,6 +276,7 @@ export class Repository {
     if (created) createdObjects.push(id);
 
     await this.storage.setRef(headRef, id);
+    this.pendingMerge = undefined;
 
     return { id, createdObjects };
   }
@@ -492,12 +534,16 @@ export class Repository {
   }
 
   /**
-   * Merges `name` into the current Branch. Only resolves the two degenerate
-   * cases that need no real merging: the target already being reachable
-   * (a no-op), and the current Branch being the one that hasn't moved (a
-   * fast-forward, which advances the Ref and creates no Objects). A
-   * `"diverged"` result means both sides have Commits the other lacks —
-   * combining them is the three-way merge this ticket does not attempt.
+   * Merges `name` into the current Branch. Resolves the two degenerate
+   * cases directly — the target already being reachable (a no-op), and the
+   * current Branch being the one that hasn't moved (a fast-forward, which
+   * advances the Ref and creates no Objects) — and otherwise performs a
+   * real three-way merge: every path is decided by comparing both sides
+   * against the Merge Base, never against each other (spec.md's merge case
+   * matrix). Paths that combine automatically are staged into the Index
+   * immediately; if any path conflicts, no Commit is created and the
+   * Repository is left with an in-progress merge, resolvable via `resolve`
+   * and completed via `commit`.
    */
   async merge(name: string): Promise<MergeOutcome> {
     const refs = await this.storage.listRefs();
@@ -525,6 +571,138 @@ export class Repository {
       await this.storage.setRef(currentRef, targetId);
       return { type: "fast-forward", base, from: currentId, to: targetId };
     }
-    return { type: "diverged", base };
+    if (base === undefined) {
+      throw new Error(`cannot merge "${name}": branches share no common history`);
+    }
+
+    const [baseline, ours, theirs] = await Promise.all([
+      this.commitPaths(base),
+      this.commitPaths(currentId),
+      this.commitPaths(targetId),
+    ]);
+
+    const allPaths = new Set([...baseline.keys(), ...ours.keys(), ...theirs.keys()]);
+    const conflicts: MergeConflict[] = [];
+    const resolvedEntries: IndexEntry[] = [];
+
+    for (const path of [...allPaths].sort()) {
+      const decision = await this.mergeFile(path, baseline.get(path), ours.get(path), theirs.get(path));
+      if (decision.kind === "conflict") {
+        conflicts.push(decision.report);
+      } else if (decision.kind === "keep") {
+        resolvedEntries.push({ path, id: decision.id });
+      } else if (decision.kind === "combine") {
+        const result = await this.store.writeObject("blob", decision.content);
+        resolvedEntries.push({ path, id: result.id });
+      }
+      // "delete": omitted from the Index entirely.
+    }
+
+    this.index = new Map(resolvedEntries.map((e) => [e.path, e.id]));
+    this.pendingMerge = { targetId, base, conflicts };
+
+    if (conflicts.length > 0) {
+      return { type: "conflict", base, target: targetId, conflicts };
+    }
+
+    const result = await this.commit({ message: `Merge branch '${name}'` });
+    return { type: "merged", base, id: result.id };
+  }
+
+  /**
+   * Resolves one Conflict by choosing a side wholesale for that path: the
+   * chosen side's content is staged into the Index (or the path is
+   * unstaged, if the chosen side deleted it). Once every Conflict in the
+   * in-progress merge is resolved this way, `commit` completes the merge.
+   */
+  resolve(path: string, choice: "ours" | "theirs"): void {
+    if (!this.pendingMerge) {
+      throw new Error("no merge in progress");
+    }
+    const index = this.pendingMerge.conflicts.findIndex((c) => c.path === path);
+    if (index === -1) {
+      throw new Error(`no conflict at path "${path}"`);
+    }
+    const conflict = this.pendingMerge.conflicts[index]!;
+    const chosenId = choice === "ours" ? conflict.oursId : conflict.theirsId;
+    if (chosenId === undefined) {
+      this.index.delete(path);
+    } else {
+      this.index.set(path, chosenId);
+    }
+    this.pendingMerge.conflicts.splice(index, 1);
+  }
+
+  /**
+   * Decides one path's fate per spec.md's merge case matrix, comparing
+   * each side against the Merge Base only. `undefined` means the path is
+   * absent — deleted, if `baseId` is defined; not yet added, if not.
+   */
+  private async mergeFile(
+    path: string,
+    baseId: ObjectId | undefined,
+    oursId: ObjectId | undefined,
+    theirsId: ObjectId | undefined,
+  ): Promise<
+    | { kind: "keep"; id: ObjectId }
+    | { kind: "delete" }
+    | { kind: "combine"; content: Uint8Array }
+    | { kind: "conflict"; report: MergeConflict }
+  > {
+    if (baseId !== undefined) {
+      const oursChanged = oursId !== baseId;
+      const theirsChanged = theirsId !== baseId;
+      if (!oursChanged && !theirsChanged) return { kind: "keep", id: baseId };
+      if (!oursChanged) return theirsId === undefined ? { kind: "delete" } : { kind: "keep", id: theirsId };
+      if (!theirsChanged) return oursId === undefined ? { kind: "delete" } : { kind: "keep", id: oursId };
+
+      // Both sides changed the path since the base.
+      if (oursId === undefined && theirsId === undefined) return { kind: "delete" };
+      if (oursId === undefined || theirsId === undefined) {
+        return { kind: "conflict", report: { path, baseId, oursId, theirsId, hunks: [] } };
+      }
+      if (oursId === theirsId) return { kind: "keep", id: oursId };
+      return this.mergeFileContent(path, baseId, oursId, theirsId);
+    }
+
+    // Absent from the base: at least one side added it.
+    if (oursId === undefined) return { kind: "keep", id: theirsId! };
+    if (theirsId === undefined) return { kind: "keep", id: oursId };
+    if (oursId === theirsId) return { kind: "keep", id: oursId };
+    return this.mergeFileContent(path, undefined, oursId, theirsId);
+  }
+
+  /** Hunk-level three-way merge of a path both sides changed, and neither deleted. */
+  private async mergeFileContent(
+    path: string,
+    baseId: ObjectId | undefined,
+    oursId: ObjectId,
+    theirsId: ObjectId,
+  ): Promise<{ kind: "combine"; content: Uint8Array } | { kind: "conflict"; report: MergeConflict }> {
+    const decoder = new TextDecoder();
+    const [baseContent, oursContent, theirsContent] = await Promise.all([
+      baseId !== undefined ? this.readBlob(baseId) : Promise.resolve(new Uint8Array()),
+      this.readBlob(oursId),
+      this.readBlob(theirsId),
+    ]);
+    const baseText = baseContent ? decoder.decode(baseContent) : "";
+    const oursText = decoder.decode(oursContent!);
+    const theirsText = decoder.decode(theirsContent!);
+
+    const result = mergeThreeWay(baseText, oursText, theirsText);
+    if (!result.conflict) {
+      return { kind: "combine", content: new TextEncoder().encode(result.text) };
+    }
+    return {
+      kind: "conflict",
+      report: {
+        path,
+        baseId,
+        oursId,
+        theirsId,
+        hunks: result.conflicts.map((c) => ({ ours: c.ours, theirs: c.theirs })),
+      },
+    };
   }
 }
+
