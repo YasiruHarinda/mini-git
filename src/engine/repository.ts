@@ -1,4 +1,5 @@
 import { decodeCommit, encodeCommit, type CommitData, type Signature } from "./commit.js";
+import { hashObject } from "./codec.js";
 import { foldIndexIntoTree, sortIndexEntries, type IndexEntry } from "./index-entries.js";
 import { ObjectStore } from "./store.js";
 import type { ObjectId, ObjectStorage, RefName } from "./storage/types.js";
@@ -7,6 +8,43 @@ import { decodeTree, encodeTree, sortTreeEntries, type TreeEntry } from "./tree.
 const DEFAULT_BRANCH: RefName = "refs/heads/main";
 const DEFAULT_SIGNATURE_NAME = "mini-git";
 const DEFAULT_SIGNATURE_EMAIL = "mini-git@localhost";
+const HEADS_PREFIX = "refs/heads/";
+
+function branchRef(name: string): RefName {
+  return name.startsWith("refs/") ? name : `${HEADS_PREFIX}${name}`;
+}
+
+function branchShortName(ref: RefName): string {
+  return ref.startsWith(HEADS_PREFIX) ? ref.slice(HEADS_PREFIX.length) : ref;
+}
+
+export interface BranchInfo {
+  name: string;
+  id: ObjectId;
+  /** Whether this is the Branch HEAD currently points at. */
+  current: boolean;
+}
+
+/** Reads a path's current Working Tree content, or undefined if the path has no file there. The engine never touches a filesystem itself (ADR 0002); this is how checkout asks the caller for what it needs. */
+export type WorkingTreeReader = (path: string) => Promise<Uint8Array | undefined>;
+
+export interface CheckoutResult {
+  /** Paths whose content in the Working Tree should become this content. */
+  writes: { path: string; content: Uint8Array }[];
+  /** Paths that should be removed from the Working Tree. */
+  removes: string[];
+}
+
+/** Thrown when checkout would overwrite uncommitted Working Tree changes. Names every offending path. */
+export class CheckoutConflictError extends Error {
+  readonly paths: string[];
+
+  constructor(paths: string[]) {
+    super(`checkout would overwrite uncommitted changes in: ${paths.join(", ")}`);
+    this.name = "CheckoutConflictError";
+    this.paths = paths;
+  }
+}
 
 export interface CommitOptions {
   message: string;
@@ -190,5 +228,131 @@ export class Repository {
       currentId = commit.parents[0];
     }
     return entries;
+  }
+
+  // --- Branches and checkout ---------------------------------------------
+
+  /** Creates a new Branch at the current Commit. Creates zero new Objects — a Branch is a pointer, not a container. */
+  async branch(name: string): Promise<RefName> {
+    const commitId = await this.headCommitId();
+    if (commitId === undefined) {
+      throw new Error(`cannot create branch "${name}": HEAD has no Commits yet`);
+    }
+    const ref = branchRef(name);
+    const refs = await this.storage.listRefs();
+    if (refs.has(ref)) {
+      throw new Error(`branch "${name}" already exists`);
+    }
+    await this.storage.setRef(ref, commitId);
+    return ref;
+  }
+
+  /** Lists Branches, marking which one HEAD currently points at. */
+  async listBranches(): Promise<BranchInfo[]> {
+    const [refs, headRef] = await Promise.all([this.storage.listRefs(), this.storage.readHead()]);
+    const branches: BranchInfo[] = [];
+    for (const [ref, id] of refs) {
+      if (!ref.startsWith(HEADS_PREFIX)) continue;
+      branches.push({ name: branchShortName(ref), id, current: ref === headRef });
+    }
+    return branches.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+
+  /** Removes the Branch's Ref. Destroys no Objects — they remain reachable by Object ID even once unnamed. */
+  async deleteBranch(name: string): Promise<void> {
+    const ref = branchRef(name);
+    const [refs, headRef] = await Promise.all([this.storage.listRefs(), this.storage.readHead()]);
+    if (!refs.has(ref)) {
+      throw new Error(`branch "${name}" does not exist`);
+    }
+    if (ref === headRef) {
+      throw new Error(`cannot delete branch "${name}": it is the current branch`);
+    }
+    await this.storage.deleteRef(ref);
+  }
+
+  /** Flattens a Tree into full paths mapped to Blob Object IDs, walking sub-Trees recursively. */
+  private async flattenTree(treeId: ObjectId | undefined, prefix = ""): Promise<Map<string, ObjectId>> {
+    const result = new Map<string, ObjectId>();
+    if (treeId === undefined) return result;
+    const entries = await this.readTree(treeId);
+    if (!entries) return result;
+    for (const entry of entries) {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.mode === "40000") {
+        for (const [subPath, id] of await this.flattenTree(entry.id, path)) {
+          result.set(subPath, id);
+        }
+      } else {
+        result.set(path, entry.id);
+      }
+    }
+    return result;
+  }
+
+  private async commitPaths(commitId: ObjectId | undefined): Promise<Map<string, ObjectId>> {
+    if (commitId === undefined) return new Map();
+    const commit = await this.readCommit(commitId);
+    if (!commit) return new Map();
+    return this.flattenTree(commit.tree);
+  }
+
+  /**
+   * Moves HEAD to the given Branch and reports how the Working Tree must
+   * change to match it. The engine computes the plan; the caller (CLI or
+   * web shell) is the one that actually reads and writes files (ADR 0002),
+   * fetching current content through `readWorkingTree` only for the paths
+   * the plan turns out to need.
+   *
+   * Refuses — and moves nothing — when a path the switch would touch
+   * currently differs from its content in the old Commit: that is an
+   * uncommitted change that checkout would otherwise silently discard.
+   * Paths whose content is identical in both Commits are left alone even
+   * if they are locally modified, since checkout does not touch them.
+   */
+  async checkout(name: string, readWorkingTree: WorkingTreeReader): Promise<CheckoutResult> {
+    const targetRef = branchRef(name);
+    const refs = await this.storage.listRefs();
+    const targetCommitId = refs.get(targetRef);
+    if (targetCommitId === undefined) {
+      throw new Error(`branch "${name}" does not exist`);
+    }
+
+    const oldCommitId = await this.headCommitId();
+    const [oldPaths, newPaths] = await Promise.all([
+      this.commitPaths(oldCommitId),
+      this.commitPaths(targetCommitId),
+    ]);
+
+    const allPaths = new Set([...oldPaths.keys(), ...newPaths.keys()]);
+    const conflicts: string[] = [];
+    const writes: { path: string; content: Uint8Array }[] = [];
+    const removes: string[] = [];
+
+    for (const path of allPaths) {
+      const oldId = oldPaths.get(path);
+      const newId = newPaths.get(path);
+      if (newId === oldId) continue; // identical in both Commits: never touched, regardless of local edits
+
+      const working = await readWorkingTree(path);
+      const workingId = working === undefined ? undefined : hashObject("blob", working);
+      if (workingId !== oldId) {
+        conflicts.push(path);
+        continue;
+      }
+
+      if (newId === undefined) {
+        removes.push(path);
+      } else {
+        writes.push({ path, content: (await this.readBlob(newId))! });
+      }
+    }
+
+    if (conflicts.length > 0) {
+      throw new CheckoutConflictError(conflicts.sort());
+    }
+
+    await this.storage.writeHead(targetRef);
+    return { writes, removes };
   }
 }

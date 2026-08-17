@@ -14,13 +14,13 @@ carried across untouched.
 
 **Blocked by:** 03 — needs Commits, Refs and a Working Tree.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `branch` creates a new Ref at the current Commit and creates zero new Objects, asserted as a count
-- [ ] Branches can be listed, and the listing shows which one HEAD points at
-- [ ] `checkout` moves HEAD and rewrites the Working Tree to match the target Commit
-- [ ] Files present in the old Commit but absent from the new one are removed from the Working Tree
-- [ ] Checkout refuses when uncommitted changes would be overwritten, and the message names every offending path
-- [ ] Uncommitted changes to files that do not differ between the two Commits survive the switch untouched
-- [ ] Committing on two Branches leaves both reachable, with history diverging from a shared Commit
-- [ ] Deleting a Branch removes the Ref and destroys no Objects
+- [x] `branch` creates a new Ref at the current Commit and creates zero new Objects, asserted as a count
+- [x] Branches can be listed, and the listing shows which one HEAD points at
+- [x] `checkout` moves HEAD and rewrites the Working Tree to match the target Commit
+- [x] Files present in the old Commit but absent from the new one are removed from the Working Tree
+- [x] Checkout refuses when uncommitted changes would be overwritten, and the message names every offending path
+- [x] Uncommitted changes to files that do not differ between the two Commits survive the switch untouched
+- [x] Committing on two Branches leaves both reachable, with history diverging from a shared Commit
+- [x] Deleting a Branch removes the Ref and destroys no Objects

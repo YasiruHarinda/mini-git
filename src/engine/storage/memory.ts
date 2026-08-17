@@ -20,6 +20,11 @@ export class MemoryStorage implements ObjectStorage {
     return this.objects.has(id);
   }
 
+  /** Total Objects stored. Not part of ObjectStorage — a test-only window into this adapter, for asserting that an operation created no new Objects. */
+  get objectCount(): number {
+    return this.objects.size;
+  }
+
   async listRefs(): Promise<Map<RefName, ObjectId>> {
     return new Map(this.refs);
   }
