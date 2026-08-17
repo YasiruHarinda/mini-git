@@ -1,5 +1,6 @@
 import { decodeCommit, encodeCommit, type CommitData, type Signature } from "./commit.js";
 import { hashObject } from "./codec.js";
+import { diffLines, type Hunk } from "./diff.js";
 import { foldIndexIntoTree, sortIndexEntries, type IndexEntry } from "./index-entries.js";
 import { ObjectStore } from "./store.js";
 import type { ObjectId, ObjectStorage, RefName } from "./storage/types.js";
@@ -44,6 +45,16 @@ export class CheckoutConflictError extends Error {
     this.name = "CheckoutConflictError";
     this.paths = paths;
   }
+}
+
+export type FileChangeType = "added" | "removed" | "modified";
+
+export interface FileDiff {
+  path: string;
+  type: FileChangeType;
+  oldId?: ObjectId;
+  newId?: ObjectId;
+  hunks: Hunk[];
 }
 
 export interface CommitOptions {
@@ -354,5 +365,73 @@ export class Repository {
 
     await this.storage.writeHead(targetRef);
     return { writes, removes };
+  }
+
+  // --- Diff ---------------------------------------------------------------
+
+  /**
+   * Resolves a Branch name or literal Object ID to a Commit's Object ID.
+   * Convenience for callers (the CLI) that let someone name either.
+   */
+  async resolveCommitish(name: string): Promise<ObjectId> {
+    const refs = await this.storage.listRefs();
+    const branchId = refs.get(branchRef(name));
+    if (branchId !== undefined) return branchId;
+    if ((await this.readCommit(name)) !== null) return name;
+    throw new Error(`"${name}" is not a Branch or a Commit`);
+  }
+
+  /** What changed between two Commits, at line level. Computed on demand — no Object is created or read beyond what's needed to describe the change. */
+  async diff(oldCommitId: ObjectId, newCommitId: ObjectId): Promise<FileDiff[]> {
+    const [oldCommit, newCommit] = await Promise.all([this.readCommit(oldCommitId), this.readCommit(newCommitId)]);
+    if (!oldCommit) throw new Error(`commit ${oldCommitId} not found`);
+    if (!newCommit) throw new Error(`commit ${newCommitId} not found`);
+
+    const results = await this.diffTrees(oldCommit.tree, newCommit.tree, "");
+    return results.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
+
+  /**
+   * Recursively compares two Trees. A sub-Tree whose Object ID is identical
+   * on both sides is never read — Structural Sharing means nothing beneath
+   * it can differ, so there is nothing to walk into.
+   */
+  private async diffTrees(oldTreeId: ObjectId | undefined, newTreeId: ObjectId | undefined, prefix: string): Promise<FileDiff[]> {
+    if (oldTreeId === newTreeId) return [];
+
+    const [oldEntries, newEntries] = await Promise.all([
+      oldTreeId !== undefined ? this.readTree(oldTreeId) : Promise.resolve([]),
+      newTreeId !== undefined ? this.readTree(newTreeId) : Promise.resolve([]),
+    ]);
+    const oldByName = new Map((oldEntries ?? []).map((e) => [e.name, e]));
+    const newByName = new Map((newEntries ?? []).map((e) => [e.name, e]));
+
+    const results: FileDiff[] = [];
+    for (const name of new Set([...oldByName.keys(), ...newByName.keys()])) {
+      const oldEntry = oldByName.get(name);
+      const newEntry = newByName.get(name);
+      if (oldEntry?.id === newEntry?.id) continue;
+
+      const path = prefix ? `${prefix}/${name}` : name;
+      const oldIsTree = oldEntry === undefined || oldEntry.mode === "40000";
+      const newIsTree = newEntry === undefined || newEntry.mode === "40000";
+      if (oldIsTree && newIsTree) {
+        results.push(...(await this.diffTrees(oldEntry?.id, newEntry?.id, path)));
+      } else {
+        results.push(await this.diffBlobEntry(path, oldEntry, newEntry));
+      }
+    }
+    return results;
+  }
+
+  private async diffBlobEntry(path: string, oldEntry?: TreeEntry, newEntry?: TreeEntry): Promise<FileDiff> {
+    const type: FileChangeType = oldEntry === undefined ? "added" : newEntry === undefined ? "removed" : "modified";
+    const [oldContent, newContent] = await Promise.all([
+      oldEntry ? this.readBlob(oldEntry.id) : Promise.resolve(null),
+      newEntry ? this.readBlob(newEntry.id) : Promise.resolve(null),
+    ]);
+    const decoder = new TextDecoder();
+    const hunks = diffLines(oldContent ? decoder.decode(oldContent) : "", newContent ? decoder.decode(newContent) : "");
+    return { path, type, oldId: oldEntry?.id, newId: newEntry?.id, hunks };
   }
 }

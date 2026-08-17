@@ -159,6 +159,33 @@ export async function runCli(argv: string[], io: CliIO): Promise<number> {
       }
     }
 
+    case "diff": {
+      const [a, b] = rest;
+      if (!a || !b) {
+        io.stderr("usage: mini-git diff <commit-or-branch> <commit-or-branch>");
+        return 1;
+      }
+      try {
+        const files = await withRepository(io, async (repo) => {
+          const oldId = await repo.resolveCommitish(a);
+          const newId = await repo.resolveCommitish(b);
+          return repo.diff(oldId, newId);
+        });
+        for (const file of files) {
+          io.stdout(`${file.type[0]!.toUpperCase()}  ${file.path}`);
+          for (const hunk of file.hunks) {
+            io.stdout(`  @@ -${hunk.oldStart},${hunk.removed.length} +${hunk.newStart},${hunk.added.length} @@`);
+            for (const line of hunk.removed) io.stdout(`  -${line}`);
+            for (const line of hunk.added) io.stdout(`  +${line}`);
+          }
+        }
+        return 0;
+      } catch (err) {
+        io.stderr((err as Error).message);
+        return 1;
+      }
+    }
+
     case "log": {
       const entries = await withRepository(io, (repo) => repo.log());
       for (const entry of entries) {
