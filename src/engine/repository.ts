@@ -1,6 +1,7 @@
 import { decodeCommit, encodeCommit, type CommitData, type Signature } from "./commit.js";
 import { hashObject } from "./codec.js";
 import { diffLines, type Hunk } from "./diff.js";
+import { layoutGraph, type GraphLayout } from "./graph.js";
 import { foldIndexIntoTree, sortIndexEntries, type IndexEntry } from "./index-entries.js";
 import { mergeThreeWay } from "./merge.js";
 import { ObjectStore } from "./store.js";
@@ -292,6 +293,32 @@ export class Repository {
       currentId = commit.parents[0];
     }
     return entries;
+  }
+
+  /**
+   * Positions every Commit reachable from any Branch into a graph laid out
+   * for rendering: a row respecting topological order, and a lane per
+   * Branch reused once that line of History has merged or ended. Pure data
+   * — nothing is drawn here (ticket 10 does that) and no Object is created.
+   */
+  async graphLayout(): Promise<GraphLayout> {
+    const branches = await this.listBranches();
+    const parentsById = new Map<ObjectId, ObjectId[]>();
+    const queue: ObjectId[] = branches.map((b) => b.id);
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (parentsById.has(id)) continue;
+      const commit = await this.readCommit(id);
+      const parents = commit?.parents ?? [];
+      parentsById.set(id, parents);
+      for (const parentId of parents) {
+        if (!parentsById.has(parentId)) queue.push(parentId);
+      }
+    }
+
+    const commits = [...parentsById.entries()].map(([id, parents]) => ({ id, parents }));
+    const tips = branches.map((b) => ({ branch: b.name, id: b.id }));
+    return layoutGraph(commits, tips);
   }
 
   // --- Branches and checkout ---------------------------------------------
