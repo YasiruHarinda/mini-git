@@ -15,12 +15,12 @@ graph, and it should be visibly true — zero new Objects.
 
 **Blocked by:** 04 — needs Branches that can diverge.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The Merge Base of two Branches is found by walking Parents
-- [ ] Correct on a linear history, on a diverged history, and on a history that already contains a Merge Commit
-- [ ] Correct when Commit timestamps are misleading — out of order or identical — proving dates are not being used
-- [ ] Merging a Branch whose Commit is already an ancestor of the current one is a no-op and says so
-- [ ] When the Merge Base is the current Branch's Commit, the Ref moves forward and no Merge Commit is created
-- [ ] A fast-forward creates zero new Objects, asserted as a count
-- [ ] The Merge Base is reported to the caller, not just used internally — the interface needs to show it later
+- [x] The Merge Base of two Branches is found by walking Parents
+- [x] Correct on a linear history, on a diverged history, and on a history that already contains a Merge Commit
+- [x] Correct when Commit timestamps are misleading — out of order or identical — proving dates are not being used
+- [x] Merging a Branch whose Commit is already an ancestor of the current one is a no-op and says so
+- [x] When the Merge Base is the current Branch's Commit, the Ref moves forward and no Merge Commit is created
+- [x] A fast-forward creates zero new Objects, asserted as a count
+- [x] The Merge Base is reported to the caller, not just used internally — the interface needs to show it later

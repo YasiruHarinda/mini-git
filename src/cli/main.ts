@@ -159,6 +159,54 @@ export async function runCli(argv: string[], io: CliIO): Promise<number> {
       }
     }
 
+    case "merge-base": {
+      const [a, b] = rest;
+      if (!a || !b) {
+        io.stderr("usage: mini-git merge-base <commit-or-branch> <commit-or-branch>");
+        return 1;
+      }
+      try {
+        const base = await withRepository(io, async (repo) => {
+          const idA = await repo.resolveCommitish(a);
+          const idB = await repo.resolveCommitish(b);
+          return repo.mergeBase(idA, idB);
+        });
+        if (base === undefined) {
+          io.stderr("no common ancestor");
+          return 1;
+        }
+        io.stdout(base);
+        return 0;
+      } catch (err) {
+        io.stderr((err as Error).message);
+        return 1;
+      }
+    }
+
+    case "merge": {
+      const name = rest[0];
+      if (!name) {
+        io.stderr("usage: mini-git merge <branch>");
+        return 1;
+      }
+      try {
+        const outcome = await withRepository(io, (repo) => repo.merge(name));
+        if (outcome.type === "already-up-to-date") {
+          io.stdout("Already up to date.");
+          return 0;
+        }
+        if (outcome.type === "fast-forward") {
+          io.stdout(`Fast-forward to ${outcome.to}`);
+          return 0;
+        }
+        io.stderr("branches have diverged: a three-way merge is not implemented yet");
+        return 1;
+      } catch (err) {
+        io.stderr((err as Error).message);
+        return 1;
+      }
+    }
+
     case "diff": {
       const [a, b] = rest;
       if (!a || !b) {

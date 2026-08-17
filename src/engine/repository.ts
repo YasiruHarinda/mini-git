@@ -57,6 +57,17 @@ export interface FileDiff {
   hunks: Hunk[];
 }
 
+/**
+ * The result of merging a Branch into the current one.
+ * - `already-up-to-date`: the target Commit is already an ancestor of the current one; nothing moved.
+ * - `fast-forward`: the current Branch's Commit was itself the Merge Base, so the Ref simply advanced; no Merge Commit was created.
+ * - `diverged`: both sides have Commits the other lacks. Combining them is a real three-way merge, not handled here.
+ */
+export type MergeOutcome =
+  | { type: "already-up-to-date"; base: ObjectId }
+  | { type: "fast-forward"; base: ObjectId; from: ObjectId; to: ObjectId }
+  | { type: "diverged"; base: ObjectId | undefined };
+
 export interface CommitOptions {
   message: string;
   author?: Partial<Signature>;
@@ -433,5 +444,87 @@ export class Repository {
     const decoder = new TextDecoder();
     const hunks = diffLines(oldContent ? decoder.decode(oldContent) : "", newContent ? decoder.decode(newContent) : "");
     return { path, type, oldId: oldEntry?.id, newId: newEntry?.id, hunks };
+  }
+
+  // --- Merge Base and fast-forward ----------------------------------------
+
+  /** Every Commit reachable from `id`, mapped to the number of Parent hops to reach it. Never looks at a timestamp — ancestry is the only signal. */
+  private async ancestorsByDistance(id: ObjectId): Promise<Map<ObjectId, number>> {
+    const distances = new Map<ObjectId, number>();
+    let frontier = [id];
+    let distance = 0;
+    while (frontier.length > 0) {
+      const next: ObjectId[] = [];
+      for (const commitId of frontier) {
+        if (distances.has(commitId)) continue;
+        distances.set(commitId, distance);
+        const commit = await this.readCommit(commitId);
+        if (commit) next.push(...commit.parents);
+      }
+      frontier = next;
+      distance++;
+    }
+    return distances;
+  }
+
+  /**
+   * The nearest common ancestor of two Commits, found by walking Parents —
+   * never by comparing timestamps, which can be wrong, equal or forged.
+   * Returns undefined if the two share no ancestor at all.
+   */
+  async mergeBase(a: ObjectId, b: ObjectId): Promise<ObjectId | undefined> {
+    const ancestorsOfA = await this.ancestorsByDistance(a);
+
+    const visited = new Set<ObjectId>();
+    let frontier = [b];
+    while (frontier.length > 0) {
+      const next: ObjectId[] = [];
+      for (const commitId of frontier) {
+        if (visited.has(commitId)) continue;
+        visited.add(commitId);
+        if (ancestorsOfA.has(commitId)) return commitId;
+        const commit = await this.readCommit(commitId);
+        if (commit) next.push(...commit.parents);
+      }
+      frontier = next;
+    }
+    return undefined;
+  }
+
+  /**
+   * Merges `name` into the current Branch. Only resolves the two degenerate
+   * cases that need no real merging: the target already being reachable
+   * (a no-op), and the current Branch being the one that hasn't moved (a
+   * fast-forward, which advances the Ref and creates no Objects). A
+   * `"diverged"` result means both sides have Commits the other lacks —
+   * combining them is the three-way merge this ticket does not attempt.
+   */
+  async merge(name: string): Promise<MergeOutcome> {
+    const refs = await this.storage.listRefs();
+    const targetId = refs.get(branchRef(name));
+    if (targetId === undefined) {
+      throw new Error(`branch "${name}" does not exist`);
+    }
+
+    const currentRef = await this.storage.readHead();
+    const currentId = refs.get(currentRef);
+    if (currentId === undefined) {
+      throw new Error("cannot merge: the current branch has no Commits yet");
+    }
+
+    if (currentId === targetId) {
+      return { type: "already-up-to-date", base: targetId };
+    }
+
+    const base = await this.mergeBase(currentId, targetId);
+
+    if (base === targetId) {
+      return { type: "already-up-to-date", base };
+    }
+    if (base === currentId) {
+      await this.storage.setRef(currentRef, targetId);
+      return { type: "fast-forward", base, from: currentId, to: targetId };
+    }
+    return { type: "diverged", base };
   }
 }
