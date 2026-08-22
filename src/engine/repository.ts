@@ -1,5 +1,5 @@
 import { decodeCommit, encodeCommit, type CommitData, type Signature } from "./commit.js";
-import { hashObject } from "./codec.js";
+import { hashObject, type ObjectType } from "./codec.js";
 import { diffLines, type Hunk } from "./diff.js";
 import { layoutGraph, type GraphLayout } from "./graph.js";
 import { foldIndexIntoTree, sortIndexEntries, type IndexEntry } from "./index-entries.js";
@@ -107,6 +107,39 @@ export interface CommitResult {
   createdObjects: ObjectId[];
 }
 
+/**
+ * What the most recent completed operation put into the Object Store.
+ * Every other Object the resulting Commit reaches was reused unchanged —
+ * Structural Sharing, made checkable rather than asserted. Only the engine
+ * can tell the two apart: identical bytes look identical from outside, so
+ * an interface comparing snapshots would see no difference at all.
+ */
+export interface OperationObjects {
+  /** The Commit the operation produced. */
+  commitId: ObjectId;
+  /** Object IDs written for the first time by that operation, in creation order — the Blobs staged for it included. */
+  created: ObjectId[];
+}
+
+export type ObjectOrigin = "created" | "reused";
+
+/**
+ * How much Structural Sharing has actually saved, counted over every
+ * Commit reachable from a Branch. A file version is one path in one
+ * Commit; the same content at two paths, or unchanged across ten Commits,
+ * is one Blob either way.
+ */
+export interface ObjectStats {
+  /** Distinct Blob Object IDs across all committed snapshots. */
+  uniqueBlobs: number;
+  /** Every (Commit, path) pair — one file version per Commit that contains it. */
+  fileVersions: number;
+  /** File versions that cost no Object of their own. */
+  reusedVersions: number;
+  /** `reusedVersions / fileVersions`, or 0 before anything is committed. */
+  savedProportion: number;
+}
+
 export interface LogEntry {
   id: ObjectId;
   message: string;
@@ -124,6 +157,10 @@ export class Repository {
   private readonly store: ObjectStore;
   private index = new Map<string, ObjectId>();
   private pendingMerge: PendingMerge | undefined;
+  /** Object IDs written for the first time since the last Commit sealed an operation — Blobs from `add` accumulate here until `commit` claims them. */
+  private pendingCreated: ObjectId[] = [];
+  private lastOperationRecord: OperationObjects | undefined;
+  private lastOperationCreated = new Set<ObjectId>();
 
   constructor(storage: ObjectStorage) {
     this.storage = storage;
@@ -136,8 +173,19 @@ export class Repository {
 
   // --- Objects -------------------------------------------------------
 
+  /**
+   * The single write path into the Object Store, so that "created or
+   * reused?" is answered where it is known rather than guessed later.
+   * Every Object this Repository writes passes through here.
+   */
+  private async writeObject(type: ObjectType, content: Uint8Array) {
+    const result = await this.store.writeObject(type, content);
+    if (result.created) this.pendingCreated.push(result.id);
+    return result;
+  }
+
   async writeBlob(content: Uint8Array): Promise<ObjectId> {
-    const { id } = await this.store.writeObject("blob", content);
+    const { id } = await this.writeObject("blob", content);
     return id;
   }
 
@@ -158,7 +206,7 @@ export class Repository {
 
   private async writeTreeInternal(entries: readonly TreeEntry[]) {
     const sorted = sortTreeEntries(entries);
-    return this.store.writeObject("tree", encodeTree(sorted));
+    return this.writeObject("tree", encodeTree(sorted));
   }
 
   async readTree(id: ObjectId): Promise<TreeEntry[] | null> {
@@ -171,7 +219,7 @@ export class Repository {
   }
 
   async writeCommit(data: CommitData): Promise<ObjectId> {
-    const { id } = await this.store.writeObject("commit", encodeCommit(data));
+    const { id } = await this.writeObject("commit", encodeCommit(data));
     return id;
   }
 
@@ -188,7 +236,7 @@ export class Repository {
 
   /** Records the given content — the Working Tree content at this moment — into the Index at `path`. */
   async add(path: string, content: Uint8Array): Promise<{ id: ObjectId; created: boolean }> {
-    const result = await this.store.writeObject("blob", content);
+    const result = await this.writeObject("blob", content);
     this.index.set(path, result.id);
     return result;
   }
@@ -273,13 +321,35 @@ export class Repository {
     };
 
     const data: CommitData = { tree: treeId, parents, author, committer, message: options.message };
-    const { id, created } = await this.store.writeObject("commit", encodeCommit(data));
+    const { id, created } = await this.writeObject("commit", encodeCommit(data));
     if (created) createdObjects.push(id);
 
     await this.storage.setRef(headRef, id);
     this.pendingMerge = undefined;
 
+    // The Commit closes the operation that its staged Blobs began, so
+    // "new since the last action" spans the whole add-then-commit arc
+    // rather than the final write alone.
+    this.lastOperationRecord = { commitId: id, created: this.pendingCreated };
+    this.lastOperationCreated = new Set(this.pendingCreated);
+    this.pendingCreated = [];
+
     return { id, createdObjects };
+  }
+
+  /** What the most recent completed operation created, or undefined before anything has been committed in this session. */
+  lastOperation(): OperationObjects | undefined {
+    return this.lastOperationRecord;
+  }
+
+  /**
+   * Whether an Object was written for the first time by the most recent
+   * operation, or was already in the Object Store and reused unchanged.
+   * Objects created before that operation — and Objects not in the Store
+   * at all — read as reused.
+   */
+  objectOrigin(id: ObjectId): ObjectOrigin {
+    return this.lastOperationCreated.has(id) ? "created" : "reused";
   }
 
   /** Walks Parents from HEAD, most recent first. Follows the first Parent only — sufficient until Merge Commits exist. */
@@ -303,8 +373,16 @@ export class Repository {
    */
   async graphLayout(): Promise<GraphLayout> {
     const branches = await this.listBranches();
+    const parentsById = await this.reachableCommits(branches.map((b) => b.id));
+    const commits = [...parentsById.entries()].map(([id, parents]) => ({ id, parents }));
+    const tips = branches.map((b) => ({ branch: b.name, id: b.id }));
+    return layoutGraph(commits, tips);
+  }
+
+  /** Every Commit reachable from the given ones by walking Parents, mapped to its own Parents. */
+  private async reachableCommits(from: readonly ObjectId[]): Promise<Map<ObjectId, ObjectId[]>> {
     const parentsById = new Map<ObjectId, ObjectId[]>();
-    const queue: ObjectId[] = branches.map((b) => b.id);
+    const queue: ObjectId[] = [...from];
     while (queue.length > 0) {
       const id = queue.shift()!;
       if (parentsById.has(id)) continue;
@@ -315,10 +393,36 @@ export class Repository {
         if (!parentsById.has(parentId)) queue.push(parentId);
       }
     }
+    return parentsById;
+  }
 
-    const commits = [...parentsById.entries()].map(([id, parents]) => ({ id, parents }));
-    const tips = branches.map((b) => ({ branch: b.name, id: b.id }));
-    return layoutGraph(commits, tips);
+  /**
+   * Counts what History would have cost without Structural Sharing against
+   * what it actually cost: every file version in every Commit reachable
+   * from a Branch, against the number of distinct Blobs those versions
+   * resolve to. Two identical files at different paths, and a file carried
+   * unchanged through ten Commits, are each one Blob.
+   */
+  async objectStats(): Promise<ObjectStats> {
+    const branches = await this.listBranches();
+    const commitIds = await this.reachableCommits(branches.map((b) => b.id));
+
+    const uniqueBlobs = new Set<ObjectId>();
+    let fileVersions = 0;
+    for (const id of commitIds.keys()) {
+      for (const blobId of (await this.commitPaths(id)).values()) {
+        uniqueBlobs.add(blobId);
+        fileVersions += 1;
+      }
+    }
+
+    const reusedVersions = fileVersions - uniqueBlobs.size;
+    return {
+      uniqueBlobs: uniqueBlobs.size,
+      fileVersions,
+      reusedVersions,
+      savedProportion: fileVersions === 0 ? 0 : reusedVersions / fileVersions,
+    };
   }
 
   // --- Branches and checkout ---------------------------------------------
@@ -625,7 +729,7 @@ export class Repository {
       } else if (decision.kind === "keep") {
         resolvedEntries.push({ path, id: decision.id });
       } else if (decision.kind === "combine") {
-        const result = await this.store.writeObject("blob", decision.content);
+        const result = await this.writeObject("blob", decision.content);
         resolvedEntries.push({ path, id: result.id });
       }
       // "delete": omitted from the Index entirely.

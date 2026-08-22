@@ -3,9 +3,10 @@ import { hashObject } from "../engine/codec.js";
 import type { CommitData } from "../engine/commit.js";
 import type { GraphLayout } from "../engine/graph.js";
 import type { IndexEntry } from "../engine/index-entries.js";
-import { CheckoutConflictError, Repository, type BranchInfo } from "../engine/repository.js";
+import { CheckoutConflictError, Repository, type BranchInfo, type ObjectStats } from "../engine/repository.js";
 import { MemoryStorage } from "../engine/storage/memory.js";
 import { CommitGraph } from "./CommitGraph.js";
+import { ObjectInspector } from "./ObjectInspector.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -55,7 +56,8 @@ export function App() {
 
   const [layout, setLayout] = useState<GraphLayout>({ nodes: [], edges: [] });
   const [commitsById, setCommitsById] = useState<Map<string, CommitData>>(new Map());
-  /** Which Commit the graph and the Commit column are both looking at. */
+  const [stats, setStats] = useState<ObjectStats | undefined>(undefined);
+  /** Which Commit the graph, the Commit column and the inspector are all looking at. */
   const [selectedCommitId, setSelectedCommitId] = useState<string | undefined>(undefined);
   const [selectedEntries, setSelectedEntries] = useState<IndexEntry[]>([]);
 
@@ -84,6 +86,7 @@ export function App() {
       }
       setLayout(nextLayout);
       setCommitsById(commits);
+      setStats(await repo.objectStats());
 
       // Selection follows an explicit request, otherwise stays put — and
       // falls back to HEAD if the Commit it was on is no longer in History.
@@ -229,111 +232,109 @@ export function App() {
       {error && <div className="error">{error}</div>}
 
       <main>
-        <div className="workspace">
-          <div className="columns">
-            <div className="column">
-              <div className="column-header">
-                <span>Working Tree</span>
-                <span>{workingPaths.length}</span>
-              </div>
-              <div className="column-body">
-                {workingPaths.length === 0 && <div className="empty">No files.</div>}
-                {workingPaths.map((path) => {
-                  const content = files[path]!;
-                  const workingId = hashObject("blob", enc(content));
-                  const indexId = indexByPath.get(path);
-                  const modified = indexId !== undefined && indexId !== workingId;
-                  const added = indexId === undefined;
-                  return (
-                    <Row
-                      key={path}
-                      path={path}
-                      id={workingId}
-                      className={modified ? "modified" : added ? "added" : undefined}
-                      onClick={() => setSelectedPath(path)}
-                      actions={
-                        <>
-                          <button onClick={() => stage(path)}>Stage</button>
-                          <button onClick={() => deleteFile(path)}>Delete</button>
-                        </>
-                      }
-                    />
-                  );
-                })}
-              </div>
-              <div className="new-file">
-                <input
-                  placeholder="new file path"
-                  value={newFileName}
-                  onChange={(e) => setNewFileName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && createFile()}
-                />
-                <button onClick={createFile}>New</button>
-              </div>
+        <div className="columns">
+          <div className="column">
+            <div className="column-header">
+              <span>Working Tree</span>
+              <span>{workingPaths.length}</span>
             </div>
-
-            <div className="column">
-              <div className="column-header">
-                <span>Index</span>
-                <span>{indexEntries.length}</span>
-              </div>
-              <div className="column-body">
-                {indexEntries.length === 0 && <div className="empty">Nothing staged.</div>}
-                {indexEntries.map(({ path, id }) => {
-                  const committedId = commitByPath.get(path);
-                  const staged = committedId !== id;
-                  return (
-                    <Row
-                      key={path}
-                      path={path}
-                      id={id}
-                      className={staged ? "added" : undefined}
-                      actions={<button onClick={() => unstage(path)}>Unstage</button>}
-                    />
-                  );
-                })}
-              </div>
+            <div className="column-body">
+              {workingPaths.length === 0 && <div className="empty">No files.</div>}
+              {workingPaths.map((path) => {
+                const content = files[path]!;
+                const workingId = hashObject("blob", enc(content));
+                const indexId = indexByPath.get(path);
+                const modified = indexId !== undefined && indexId !== workingId;
+                const added = indexId === undefined;
+                return (
+                  <Row
+                    key={path}
+                    path={path}
+                    id={workingId}
+                    className={modified ? "modified" : added ? "added" : undefined}
+                    onClick={() => setSelectedPath(path)}
+                    actions={
+                      <>
+                        <button onClick={() => stage(path)}>Stage</button>
+                        <button onClick={() => deleteFile(path)}>Delete</button>
+                      </>
+                    }
+                  />
+                );
+              })}
             </div>
-
-            <div className="column">
-              <div className="column-header">
-                <span>{selectedCommitId === headId ? "Commit (HEAD)" : "Commit (selected)"}</span>
-                <span className="oid">{selectedCommitId ? shortId(selectedCommitId) : "—"}</span>
-              </div>
-              <div className="column-body">
-                {selectedEntries.length === 0 && <div className="empty">No Commits yet.</div>}
-                {selectedEntries.map(({ path, id }) => (
-                  <Row key={path} path={path} id={id} />
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="sidebar">
-            <div className="editor">
-              <div className="editor-header">
-                <span>{selectedPath ?? "select a file"}</span>
-              </div>
-              <textarea
-                disabled={!selectedPath}
-                value={selectedPath ? (files[selectedPath] ?? "") : ""}
-                onChange={(e) => selectedPath && editFile(selectedPath, e.target.value)}
-                spellCheck={false}
-              />
-            </div>
-            <div className="commit-box">
+            <div className="new-file">
               <input
-                placeholder="commit message"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && commit()}
+                placeholder="new file path"
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && createFile()}
               />
-              <button onClick={commit} disabled={indexEntries.length === 0}>
-                Commit
-              </button>
+              <button onClick={createFile}>New</button>
             </div>
-            {lastCommitId && <div className="error" style={{ color: "var(--text-dim)" }}>Committed {shortId(lastCommitId)}</div>}
           </div>
+
+          <div className="column">
+            <div className="column-header">
+              <span>Index</span>
+              <span>{indexEntries.length}</span>
+            </div>
+            <div className="column-body">
+              {indexEntries.length === 0 && <div className="empty">Nothing staged.</div>}
+              {indexEntries.map(({ path, id }) => {
+                const committedId = commitByPath.get(path);
+                const staged = committedId !== id;
+                return (
+                  <Row
+                    key={path}
+                    path={path}
+                    id={id}
+                    className={staged ? "added" : undefined}
+                    actions={<button onClick={() => unstage(path)}>Unstage</button>}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="column">
+            <div className="column-header">
+              <span>{selectedCommitId === headId ? "Commit (HEAD)" : "Commit (selected)"}</span>
+              <span className="oid">{selectedCommitId ? shortId(selectedCommitId) : "—"}</span>
+            </div>
+            <div className="column-body">
+              {selectedEntries.length === 0 && <div className="empty">No Commits yet.</div>}
+              {selectedEntries.map(({ path, id }) => (
+                <Row key={path} path={path} id={id} />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="sidebar">
+          <div className="editor">
+            <div className="editor-header">
+              <span>{selectedPath ?? "select a file"}</span>
+            </div>
+            <textarea
+              disabled={!selectedPath}
+              value={selectedPath ? (files[selectedPath] ?? "") : ""}
+              onChange={(e) => selectedPath && editFile(selectedPath, e.target.value)}
+              spellCheck={false}
+            />
+          </div>
+          <div className="commit-box">
+            <input
+              placeholder="commit message"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && commit()}
+            />
+            <button onClick={commit} disabled={indexEntries.length === 0}>
+              Commit
+            </button>
+          </div>
+          {lastCommitId && <div className="error" style={{ color: "var(--text-dim)" }}>Committed {shortId(lastCommitId)}</div>}
         </div>
 
         <div className="panel graph-panel">
@@ -350,6 +351,14 @@ export function App() {
               onSelect={setSelectedCommitId}
             />
           </div>
+        </div>
+
+        <div className="panel inspector-panel">
+          <div className="column-header">
+            <span>Object Inspector</span>
+            <span className="oid">{selectedCommitId ? shortId(selectedCommitId) : "—"}</span>
+          </div>
+          <ObjectInspector repo={repo} commitId={selectedCommitId} stats={stats} originOf={(id) => repo.objectOrigin(id)} />
         </div>
       </main>
     </>
