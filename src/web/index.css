@@ -11,6 +11,13 @@
   --modified-bg: #fdf1d8;
   --modified-text: #8a5a00;
   --danger: #b3261e;
+  --on-accent: #ffffff;
+  --lane-0: #a6511a;
+  --lane-1: #2f6f4f;
+  --lane-2: #3559a8;
+  --lane-3: #8a4f9e;
+  --lane-4: #8a6a00;
+  --lane-5: #1f6f80;
   --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
@@ -28,6 +35,13 @@
     --modified-bg: #3a2e12;
     --modified-text: #e0b64c;
     --danger: #e5766c;
+    --on-accent: #16151a;
+    --lane-0: #e08a4c;
+    --lane-1: #7fce9a;
+    --lane-2: #7aa5f0;
+    --lane-3: #c99ae0;
+    --lane-4: #e0b64c;
+    --lane-5: #6ecbdc;
   }
 }
 
@@ -46,9 +60,10 @@ body {
 }
 
 #root {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 header {
@@ -107,6 +122,13 @@ button:disabled {
 
 main {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace {
+  flex: 1 1 55%;
   display: flex;
   min-height: 0;
 }
@@ -261,4 +283,127 @@ main {
   color: var(--text-dim);
   padding: 10px;
   font-size: 12px;
+}
+
+/* --- History: the Commit graph ------------------------------------------ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+}
+
+.graph-panel {
+  flex: 1 1 45%;
+}
+
+/* The graph scrolls inside its own box, so a tall or wide History never
+   makes the page itself scroll. */
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+svg.graph {
+  display: block;
+}
+
+.graph-row {
+  fill: transparent;
+  cursor: pointer;
+}
+
+.graph-row:hover {
+  fill: var(--accent-bg);
+  opacity: 0.5;
+}
+
+.graph-row.selected {
+  fill: var(--accent-bg);
+}
+
+/* Ink sits above the hit targets, so clicks fall through to the row. */
+.graph-ink {
+  pointer-events: none;
+}
+
+.graph-ink path {
+  stroke-width: 2;
+}
+
+.node {
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.node.merge {
+  fill: var(--bg);
+  stroke-width: 2.5;
+}
+
+.node-halo {
+  fill: none;
+  stroke-width: 1.5;
+  opacity: 0.5;
+}
+
+.chip {
+  fill: var(--panel);
+  stroke: var(--border);
+}
+
+.chip.head {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.chip-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  fill: var(--text);
+}
+
+.chip-text.head {
+  fill: var(--on-accent);
+  font-weight: 600;
+}
+
+.graph-text {
+  font-family: var(--mono);
+  font-size: 12px;
+  fill: var(--text-dim);
+}
+
+.graph-text.selected {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+@media (max-width: 1000px) {
+  #root {
+    height: auto;
+    overflow: visible;
+  }
+
+  main {
+    flex-direction: column;
+  }
+
+  .workspace {
+    flex-direction: column;
+  }
+
+  .columns,
+  .sidebar,
+  .graph-panel {
+    max-height: 70vh;
+  }
+
+  .sidebar {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
 }
